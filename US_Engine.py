@@ -440,26 +440,6 @@ class EngineUS:
             theTrack.Delete()
 
 
-    def generate_QDC(self):
-        for event in self.loopOver:
-            eventTree.GetEvent(event)
-            if eventTree.GetReadEvent()%100000==0: print("now event at",eventTree.GetReadEvent())
-            h = eventTree.EventHeader
-            time_stamp = h.GetEventTime()
-            r = (time_stamp%(4*3564)/4)
-            for hit in eventTree.Digi_MuFilterHits:
-                if not hit.isValid() : continue
-                detID = hit.GetDetectorID()
-                system = hit.GetSystem()
-                if system != 2 : continue
-                l  = (detID%10000)//1000
-                bar = detID%1000
-                theDict = map2Dict(hit,"GetAllSignals",mask = True)
-                times = map2Dict(hit,"GetAllTimes",mask = True)
-                deltaT = hit.GetDeltaT()
-                for key in theDict:
-                    self.hist["qdc_all"+str(detID)+"_channel_"+str(key)].Fill(theDict[key])
-
     def write_to_file(self):
         if options.platform == "HTCondor":
             ut.writeHists(self.hist, "histograms_"+str(self.nJob)+"_"+str(self.data)+"_run"+str(options.runNumber)+"_"+str(options.trackType)+".root")
