@@ -1,2 +1,2 @@
 # US_scripts
-US Analysis scripts
+Scripts for studies on Upstream Muon Detector
