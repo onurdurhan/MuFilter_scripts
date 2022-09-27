@@ -10,3 +10,4 @@ def main():
 if __name__ == "__main__":
     print("creating histograms for US Muon detector")
     rc  = main()
+    print("Finished taks")
