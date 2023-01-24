@@ -3,6 +3,8 @@ import atexit
 import time
 import ctypes
 from array import array
+import os, psutil
+import gc
 ROOT.gStyle.SetTitleFont(102,"")
 ROOT.gStyle.SetTitleFont(102,"xyz")
 ROOT.gStyle.SetStatFont(102)
@@ -92,7 +94,7 @@ parser = ArgumentParser()
 parser.add_argument("-r", "--runNumber", dest="runNumber", help="run number", type=int,required=True)
 parser.add_argument("-p", "--path", dest="path", help="run number",required=False,default="")
 parser.add_argument("-f", "--inputFile", dest="fname", help="file name for MC", type=str,default=None,required=False)
-parser.add_argument("-g", "--geoFile", dest="geoFile", help="geofile", required=True)
+parser.add_argument("-g", "--geoFile", dest="geoFile", help="geofile", required=False, default=False)
 parser.add_argument("-b", "--heartBeat", dest="heartBeat", help="heart beat", default=10000,type=int)
 parser.add_argument("-c", "--command", dest="command", help="command", default="")
 parser.add_argument("-n", "--nEvents", dest="nEvents", help="number of events", default=-1,type=int)
@@ -131,6 +133,15 @@ if options.runNumber > 0:
                partitions+=1
 
 import SndlhcGeo
+if not options.geoFile:
+    if options.runNumber < 4575:
+        options.geoFile =  "geofile_sndlhc_TI18_V3_08August2022.root"
+    elif options.runNumber < 4855:
+        options.geoFile =  "geofile_sndlhc_TI18_V5_14August2022.root"
+    else:
+        options.geoFile =  "geofile_sndlhc_TI18_V6_08October2022.root"
+
+print("geofile :", options.geoFile)
 if (options.geoFile).find('../')<0: geo = SndlhcGeo.GeoInterface(path+options.geoFile)
 else:                                         geo = SndlhcGeo.GeoInterface(options.geoFile[3:])
 MuFilter = geo.modules['MuFilter']
@@ -239,9 +250,14 @@ class MuFilterEngine:
                         else : side = "R" 
                         channel_key = bar_key+side+"largesipm"+str(channel)
                         if system == 2 and self.smallSiPMchannel(channel): channel_key = bar_key+side+"smallsipm"+str(channel)
-                        ut.bookHist(self.hist, "qdc"+channel_key," ",200,0.,200)
+                        ut.bookHist(self.hist, "qdc"+channel_key," ",200,-50.,200)
                         if orientation == "vertical" : break
         ut.bookHist(self.hist,"chi2Ndof", "",400,0,800)
+        ut.bookHist(self.hist,"track_angle_x","", 100,0.,1.)
+        ut.bookHist(self.hist,"track_angle_y","", 100,0.,1.)
+        ut.bookHist(self.hist,"xEx_diff","",100,-25.,25.)
+        ut.bookHist(self.hist,"yEx_diff","",100,-25.,25.)
+        ut.bookHist(self.hist,"xvsy","",100,-25.,25.,100,-25.,25.)
 
         for key in self.hist:
             print(key)
@@ -286,30 +302,31 @@ class MuFilterEngine:
         y=pos.y()+slope_y*(z_mid-pos.z())
         return x,y
 
-    def check_reach(self, theTrack,trackType,data):
-        reaching  = True
-        if trackType == 'DS' and data == 'H8':
-            l, bar = 0, 0
-            MuFilter.GetPosition(int(2E4+l*1E3+bar),A,B)
-            z_0 = (A[2]+B[2])/2
-            x, y = extrapolate(theTrack,z_0)
-            x_det = [-74.36500144004822, 8.160000085830688]
-            y_det = [0.9049997925758362, 54.99499979056418]        
-        ####for TI18#####
-        if trackType == 'DS' and data == 'TI18':
-            z_0 = 379.4010
-            x,y = self.extrapolate(theTrack,z_0)
-            x_det = [-78.9938,3.5294]
-            y_det = [15., 65.]
-        if trackType == 'Scifi' and data == 'TI18': 
-            z_0=470.3488
-            x,y = self.extrapolate(theTrack,z_0)
-            x_det = [-79.3248,3.1984]
-            y_det = [7.9,68.0699]
-        if x < x_det[0] or x > x_det[1]: reaching = False
-        if y < y_det[0] or y > y_det[1]: reaching = False
-        return reaching
 
+    def check_scoring(self,theTrack,system,plane):
+        reaching  = True
+        orientation = self.systemAndOrientation(system,plane)
+        bars = range(self.systemAndBars[system])
+        if orientation == 'horizontal':
+            MuFilter.GetPosition(int(system*10**4+plane*1E3+bars[0]),A,B)
+            x_start, x_end = A[0], B[0]
+            y_start = (A[1]+B[1])/2
+            MuFilter.GetPosition(int(system*10**4+plane*1E3+bars[-1]),A,B)
+            y_end = (A[1]+B[1])/2
+        if orientation == 'vertical':
+            MuFilter.GetPosition(int(system*10**4+plane*1E3+bars[0]),A,B)
+            y_start, y_end = A[1], B[1]
+            x_start = (A[0]+B[0])/2
+            MuFilter.GetPosition(int(system*10**4+plane*1E3+bars[-1]),A,B)
+            x_end = (A[0]+B[0])/2
+        x_det = [x_start,x_end]
+        y_det = [y_start,y_end]
+        z_mid = (A[2]+B[2])/2
+        x, y = self.extrapolate(theTrack,z_mid)
+        reaching_x = (min(x_det) <= x and x <= max(x_det))
+        reaching_y = (min(y_det) <= y and y <= max(y_det))
+        reaching = reaching_x*reaching_y
+        return reaching
 
     def chris(self, test_plane, observed_detIDs, expected_detIDs):
         detIDs_per_layer = {0:[],1:[],2:[],3:[],4:[]}
@@ -377,16 +394,50 @@ class MuFilterEngine:
         if t > 1525 and t < 1535 : isRinging = True
         return isRinging
 
-
+    def veto_eff(self,tree):
+        for event in tree:
+            Reco_MuonTracks.Clear()
+            for aTrack in Reco_MuonTracks: aTrack.Delete()
+            rc = trackTask.ExecuteTask("ScifiDS")
+            if Reco_MuonTracks.GetEntries()>2 : continue
+            TRACKS={}
+            for track in Reco_MuonTracks:
+                if track.GetUniqueID()==1 : TRACKS['Scifi']=track
+                if track.GetUniqueID()==3 : TRACKS['DS']=track
+            if 'Scifi' not in TRACKS :continue
+            if  'DS'   not in TRACKS :continue
+            both_on_plane = True
+            for key in TRACKS:
+                reach = self.check_scoring(TRACKS[key],1,1)
+                if not reach :
+                    both_on_plane = False
+                    break
+            if not both_on_plane : continue
+            fitStatus = TRACKS['DS'].getFitStatus()
+            chi2Ndof = fitStatus.getChi2()/(fitStatus.getNdf()+1E-10)
+            MuFilter.GetPosition(int(1*10**4+1*1E3+4),A,B)
+            z_mid = (A[2]+B[2])/2
+            xEx_Scifi, yEx_Scifi = self.extrapolate(TRACKS['Scifi'],z_mid)
+            xEx_DS, yEx_DS = self.extrapolate(TRACKS['DS'],z_mid)
+            x_diff=xEx_Scifi-xEx_DS
+            y_diff=yEx_Scifi-yEx_DS
+            self.hist['xEx_diff'].Fill(x_diff)
+            self.hist['yEx_diff'].Fill(y_diff)
+            self.hist['xvsy'].Fill(x_diff,y_diff)
+                                                
     def us_eff(self):
         background_region = {0:15.,1:15.,2:12.5,3:10.,4:10.}
+        ROOT.EnableImplicitMT()
+        newtree = eventTree.CloneTree(0)
         for event in self.loopOver: 
             if event > eventTree.GetEntries(): break # don't loopover the same event in condor !
             Reco_MuonTracks.Clear()
             for aTrack in Reco_MuonTracks: aTrack.Delete()
             eventTree.GetEvent(event)
-            if eventTree.GetReadEvent()%100000==0 : print("now event at",eventTree.GetReadEvent())
+            process = psutil.Process(os.getpid())
+            if eventTree.GetReadEvent()%100000==0 : print("now event at",eventTree.GetReadEvent(), process.memory_info().rss/1024**2)
             optionTrack = options.trackType
+            if optionTrack == 'ScifiDS' :rc = trackTask.ExecuteTask("ScifiDS")
             if optionTrack=='DS': rc = trackTask.ExecuteTask("DS")
             else: rc = trackTask.ExecuteTask("Scifi")
             if not Reco_MuonTracks.GetEntries() == 1 : continue ### dont forget this
@@ -400,11 +451,16 @@ class MuFilterEngine:
             fitStatus = theTrack.getFitStatus()
             chi2Ndof = fitStatus.getChi2()/(fitStatus.getNdf()+1E-10)
             self.hist["chi2Ndof"].Fill(chi2Ndof)
-            if chi2Ndof>20: continue
-            if abs(mom.x()/mom.z())>0.25:continue
-            if abs(mom.y()/mom.z())>0.1: continue
+            if fitStatus.getNdf()<2 : continue
+            slope_x=mom.x()/mom.z()
+            slope_y=mom.y()/mom.z()
+            slope=ROOT.TMath.Sqrt(slope_x**2+slope_y**2)
+            self.hist["track_angle_x"].Fill(slope_x)
+            self.hist["track_angle_y"].Fill(slope_y)
+            if abs(mom.x()/mom.z())>0.1: continue
+            if abs(mom.y()/mom.z())>0.2: continue
             nHit_per_stat  = {0:0,1:0,2:0,3:0,4:0}
-            reach=self.check_reach(theTrack,options.trackType, self.data)
+            reach=self.check_scoring(theTrack,2,0)
             if reach == False : continue
             veto_hits = {}
             us_hits =   {}
@@ -452,6 +508,7 @@ class MuFilterEngine:
                     self.hist["total-bars-"+str(l)].Fill(bar+1)
             if not clean_mu_event : continue
             us_hits.update(ds_hits)
+            newtree.Fill()
             for hit in us_hits:
                 detID = hit.GetDetectorID()
                 system = hit.GetSystem()
@@ -483,6 +540,8 @@ class MuFilterEngine:
                     else:
                         self.hist["total-channels-"+bar_key].Fill(key+1)
             theTrack.Delete()
+            gc.collect()
+        return newtree
 
 
     def write_to_file(self):
