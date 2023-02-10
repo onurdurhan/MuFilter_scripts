@@ -5,12 +5,16 @@ from array import array
 import rootUtils as ut
 ROOT.gStyle.SetTitleFont(102,"")
 ROOT.gStyle.SetTitleFont(102,"xyz")
+ROOT.gStyle.SetTextFont(10)
 ROOT.gStyle.SetStatFont(102)
 ROOT.gStyle.SetLabelFont(102,"xyz")
 ROOT.gStyle.SetLegendFont(102)
 ROOT.gStyle.SetHistLineColor(1)
 ROOT.gStyle.SetHistLineWidth(3)
 ROOT.gROOT.SetBatch(ROOT.kTRUE)
+#ROOT.gStyle.SetPadLeftMargin(-0.5)
+#ROOT.gStyle.SetPadRightMargin(-0.5)
+#ROOT.gPad.SetMargin(0.02, 0.001, 0.04, 0.02)
 
 class Gaux:
     def __call__(self, x, par):
@@ -20,7 +24,7 @@ class Gaux:
         #par[2]= mean
         #par[3]= sigma
         #par[4]= constant (noise)
-        np = 20. #50.      # number of convolution steps
+        np = 50.      # number of convolution steps
         integral = 0 
 #        x_low= -3
 #        x_up =  3
@@ -97,10 +101,21 @@ class TwoLangaufun:
         N2 = langaufun(x,par2)
         return N1+abs(N2)
 
+class ExpoLandau:
+    def __call__(self,x,par):
+        mpshift  = -0.22278298
+        mpc = par[1] - mpshift * par[0]
+#        Landau(Double_t x, Double_t mpv = 0, Double_t sigma = 1, Bool_t norm = kFALSE)
+        land = ROOT.TMath.Landau(x[0],mpc,par[0])*par[2] #,par[0])/par[0]
+        expo = ROOT.TMath.Exp(-par[3]*x[0])*par[4]
+        expoland = expo+land
+        return expoland
 
 gaux = Gaux()
 langaufun = Langau()
 twoLangaufun = TwoLangaufun()
+expoland = ExpoLandau()
+
 class Analyzer:
     def __init__(self,fname):
         self.fname = fname
@@ -108,17 +123,14 @@ class Analyzer:
         self.f = ROOT.TFile(fname)
         if fname.find('TI18')>0 : data = 'TI18'
         else : data = 'H8'
-        idx = fname.find('run')
-        self.runNr = fname[idx:(idx+7)]
-        self.outf = ROOT.TFile("analysis_derivative_"+data+"_"+self.runNr+".root","RECREATE")
+        idx = fname.find('00')
+        self.runNr = fname[idx:(idx+6)]
+        self.outf = ROOT.TFile("analysis_"+data+"_run_"+self.runNr+".root","RECREATE")
 
-    def fit_langau(self, hist, o, bmin,bmax,opt=''):
-        if opt == 2:
-            params = {0:'Width(scale)',1:'mostProbable',2:'norm',3:'sigma',4:'N2'}
-            F = ROOT.TF1('langau',langaufun,0,200,len(params))
-        else: 
-            params = {0:'Width(scale)',1:'mostProbable',2:'norm',3:'sigma'}
-            F = ROOT.TF1('langau',twoLangaufun,0,200,len(params))
+    def fit_langau(self, hist, o, bmin,bmax):
+        params = {0:'Width(scale)',1:'mostProbable',2:'norm',3:'sigma'} #,4:'N2'}
+        F = ROOT.TF1('langau',langaufun,-10.,200 , len(params))
+        print(F.GetNpar(),len(params))
         for p in params: F.SetParName(p,params[p])
         rc = hist.Fit('landau','S'+o,'',bmin,bmax)
         res = rc.Get()
@@ -127,20 +139,35 @@ class Analyzer:
         F.SetParameter(1,res.Parameter(1))
         F.SetParameter(0,res.Parameter(2))
         F.SetParameter(3,res.Parameter(2))
-        F.SetParameter(4,0)
         F.SetParLimits(0,0,100)
         F.SetParLimits(1,0,100)
         F.SetParLimits(3,0,10)
         rc = hist.Fit(F,'S'+o,'',bmin,bmax)
+
+        ChiSqr = F.GetChisquare()
+        NDF = F.GetNDF()
+        
+        print(ChiSqr,NDF, ChiSqr/NDF)
+
         res = rc.Get()
         return res
 
-    def twoLangaufun(x,par):
-        N1 = langaufun(x,par)
-        par2 = [par[0],par[1]*2,par[4],par[3]]
-        N2 = langaufun(x,par2)
-        return N1+abs(N2)
 
+    def fit_expoland(self,hist,o,bmin,bmax):
+        params = {0:'Width(scale)',1:'mostProbable',2:'NormLandau',3:'Tau',4:'NormExpo'} 
+        F = ROOT.TF1('langau',expoland,-20.,200.,len(params))
+        for p in params: F.SetParName(p,params[p])
+        F.SetParameter(0,3)
+        F.SetParameter(1,hist.GetXaxis().GetBinCenter(hist.GetMaximumBin()))
+        F.SetParameter(2,1)
+        F.SetParameter(3,1)
+        F.SetParameter(4,1)
+        F.SetParLimits(0,0,10)
+        F.SetParLimits(1,-10, 200)
+        F.SetParLimits(3,0,100)
+#        F.SetParLimits(4,0,1E6)
+#        F.SetParLimits(3,0,hist.GetEntries()) 
+        rc = hist.Fit(F,'S'+o,'',bmin,bmax)
 
     def fit_gaux(self, hist):
         params = {0:'Const(box)',1:'Scale(gaus)',2:'mean',3:'sigma',4:'Const(noise)'}
@@ -173,157 +200,69 @@ class Analyzer:
         else: return False
     
 
-    def analyze_langau(self, fname):
-        f = ROOT.TFile(fname)
-        mp_langau_gr = ROOT.TGraphErrors()
-        chi2_gr =  ROOT.TGraph()
-        mp_langau_gr.SetMarkerStyle(21)
-        chi2_gr.SetMarkerStyle(21)
-        fc = 0
-        np = 0
-        os.system("mkdir "+self.runNr)
-        import numpy as nmp
-        domain = nmp.linspace(0,100.,101)
-        cuts = {}
-        Fit_Statistics_29 = open(self.runNr+"/Fit_Statistics_29_version2.tex", "w")
-        Fit_Statistics_29.write("\\documentclass{article} \n")
-        Fit_Statistics_29.write("\\usepackage{graphicx} \n")
-        Fit_Statistics_29.write("\\begin{document} \n")
-#        Fit_Statistics_29.write("\\begin{table}[ht] \n")
-#        Fit_Statistics_29.write("\\centering \n")
-#        Fit_Statistics_29.write("\\resizebox{\\textwidth}{!}{\\begin{tabular} { |l|| r | r | r | r | r  | r | r |} \n")
-#        Fit_Statistics_29.write("\\multicolumn{8}{c}{Fit Statistics Variable 29} \\\\ \n")
-#        Fit_Statistics_29.write("\\hline \n")
-#        Fit_Statistics_29.write("Channel ID   & $Width (Scale)$ & $MPV$ & $Norm$ & $\sigma$ & $N2$ & $\chi^2/ndof $ & $Threshold$\\\\ \n")
-#        Fit_Statistics_29.write( "\\hline \n" )
-
-        for l in range(5):
-            Fit_Statistics_29.write("\\clearpage \n")
-            for bar in range(10):
-                Fit_Statistics_29.write("\\begin{table}[ht] \n")
-                Fit_Statistics_29.write("\\centering \n")
-                Fit_Statistics_29.write("\\resizebox{\\textwidth}{!}{\\begin{tabular} { |l|| r | r | r | r | r  | r | r |} \n")
-                Fit_Statistics_29.write("\\multicolumn{8}{c}{Fit Statistics : US Plane-%s Bar-%s} \\\\ \n" % (str(l),str(bar) ))
-                Fit_Statistics_29.write("\\hline \n")
-                Fit_Statistics_29.write("Channel ID   & $Width (Scale)$ & $MPV$ & $Norm$ & $\sigma$ & $N2$ & $\chi^2/ndof $ & $Threshold$\\\\ \n")
-                Fit_Statistics_29.write( "\\hline \n" )
-                detID=int(2E4+l*1E3+bar)
-                ut.bookCanvas(self.canvases,"threshold_"+str(detID),"Langau Distributions with Threshold",700,500,4,4)
-                canvas = f.Get("langau_muon"+str(detID))
-                for c in range(16):
-                    fc += 1
-                    if self.smallSiPMchannel(c):continue
-                    pad = canvas.GetPad(c+1)
-                    h = pad.GetPrimitive("qdc_muon"+str(detID)+"_channel_"+str(c))
-                    if not h : continue
-                    langau = h.GetFunction("langau")
-                    if not langau  :
-                        print("No Fit result for ", detID, c)
-                        continue
-                    langau.SetNormalized(True)
-                    for x in domain:
-                        if langau.Derivative(x)>1E-5:
-                            threshold = x
-                            break
-                    print("The ratio ", h.Integral(int(threshold+1),100)/h.Integral(0,100), detID, c )
-                    if Fit_Statistics_29!= None:
-                        Fit_Statistics_29.write(format("%s" % "DetID "+str(detID)+" Channel "+str(c)))
-                        for par in range(langau.GetNpar()):
-                            value = langau.GetParameter(par)
-                            value_error = langau.GetParError(par)
-                            Fit_Statistics_29.write( " & $ %.2f  \\pm  %.2f $" % (value, value_error))
-                        chi2 = langau.GetChisquare()
-                        ndof = langau.GetNDF()+1E-12
-                        cndf = chi2/ndof
-                        if cndf > 200 : cndf = 999
-                        Fit_Statistics_29.write("& $%.2f$" % cndf)
-                        Fit_Statistics_29.write("& $%.2f$" % threshold)
-                        Fit_Statistics_29.write( " \\\\") ### end of row
-                        Fit_Statistics_29.write( "\n")
-
-
-                    langau.SetNormalized(False)
-                    self.canvases["threshold_"+str(detID)].cd(c+1)
-                    ROOT.gPad.Update()
-                    rc = h.Draw()
-                    self.canvases["threshold_"+str(detID)].Update()
-                    cuts['threshold_'+str(detID)+"_"+str(c)] = ROOT.TLine(threshold, 0., threshold, 500)    
-                    cuts['threshold_'+str(detID)+"_"+str(c)].SetLineColor(ROOT.kBlue)
-                    cuts['threshold_'+str(detID)+"_"+str(c)].SetLineWidth(1)
-                    cuts['threshold_'+str(detID)+"_"+str(c)].Draw("same")
-                    ROOT.gPad.Update()
-                    ROOT.gPad.Modify()
-                    self.canvases["threshold_"+str(detID)].Update()
-                    self.canvases["threshold_"+str(detID)].Modify()
-                    mp = langau.GetParameter(1)
-                    mp_langau_gr.SetPoint(np, fc+1,mp)
-                    ex = 0
-                    ey = langau.GetParError(1)
-                    mp_langau_gr.SetPointError(np, ex, ey)
-                    chi2 = langau.GetChisquare()
-                    ndof = langau.GetNDF()+1E-12
-                    control = chi2/ndof
-                    if control > 200: control = 200
-                    chi2_gr.SetPoint(int(np) , fc+1 , control)
-                    np += 1
-
-
-                Fit_Statistics_29.write("\\hline \n")
-#                Fit_Statistics_29.write("\\caption {Fit Statistics of US Plane %s}" %l)
-                Fit_Statistics_29.write("\n\\end{tabular}}\n")
-                Fit_Statistics_29.write("\\end{table} \n")
- 
-                self.canvases["threshold_"+str(detID)].Print(self.runNr+"/threshold_"+str(detID)+".pdf")
-        ut.bookCanvas(self.canvases, "mp_all_channels", "Most Probable Values ", 1000,500,1,2)           
-        self.canvases["mp_all_channels"].cd(1)
-        mp_langau_gr.Draw('AP')
-        self.canvases["mp_all_channels"].cd(2)
-        chi2_gr.Draw("AP")
-#        Fit_Statistics_29.write("\\hline \n")
-#        Fit_Statistics_29.write("\n\\end{tabular}}\n")
-#        Fit_Statistics_29.write("\\end{table} \n")
-        Fit_Statistics_29.write( "\\end{document}")
-        Fit_Statistics_29.close()
-        print("Printing pdf output ...")
-        os.system("pdflatex --output-directory " + self.runNr+ " "+self.runNr+"/Fit_Statistics_29_version2.tex")
-        return mp_langau_gr, chi2_gr
-
+    def fit_convolution(self, hist, o, bmin,bmax):
+#        f_conv.SetNofPointsFFT(1000)
+        F = ROOT.TF1("langau", f_conv, -10., 200., f_conv.GetNpar())
+        params = {0:'Width(scale)',1:'mostProbable',2:'norm',3:'sigma',4:'N2'}
+        for p in params: F.SetParName(p,params[p])
+        rc = hist.Fit('landau','S'+o,'',bmin,bmax)
+        res = rc.Get()
+        if not res: return res
+        F.SetParameter(2,res.Parameter(0))
+        F.SetParameter(1,res.Parameter(1))
+        F.SetParameter(0,res.Parameter(2))
+        F.SetParameter(3,res.Parameter(2))
+        F.SetParameter(4,0)
+        F.SetParLimits(0,0,100)
+        F.SetParLimits(1,0,100)
+        F.SetParLimits(3,0,10)
+        rc = hist.Fit(F,'S'+o,'',bmin,bmax)
+        res = rc.Get()
+        return res
 
     def analyze_QDC(self):
-        for l in range(5):
-            for bar in range(10):
-                detID=int(2E4+l*1E3+bar)
-                ut.bookCanvas(self.canvases,"langau_muon"+str(detID),"Langau muon",700,500,4,4)              
+        hist= {}
+        ut.readHists(hist,self.fname)             
         mp_langau_gr = ROOT.TGraphErrors()
         chi2_gr =  ROOT.TGraph()
         mp_langau_gr.SetMarkerStyle(21)
         chi2_gr.SetMarkerStyle(21)
         fc = 0
         np = 0
-        for l in range(5):
-            for bar in range(10):
-                detID=int(2E4+l*1E3+bar)
-                for c in range(16):
-                    fc += 1
-                    if self.smallSiPMchannel(c):continue
-                    tmp = self.f.Get("qdc_muon"+str(detID)+"_channel_"+str(c))
-                    bmin,bmax = 0,80
+        for histogram in hist:
+                    if histogram.find("qdcDS")<0 : continue
+                    ut.bookCanvas(self.canvases, histogram,histogram)
+        for histogram in hist:
+                    if histogram.find("qdcDS")<0 : continue
+                    fc+=1
+                    tmp = self.f.Get(histogram)
+                    tmp.SetTitle(histogram)
+                    print("nbr of entries in this ", tmp.GetEntries())
+                    bmin,bmax = 0,200
+                    print(tmp.GetMaximumBin())
                     for k in range(tmp.GetMaximumBin(),1,-1):
                         if tmp.GetBinContent(k)<2:
                             bmin = k
                             break
-                    print("Fitting ", detID ," channel ", c)
-                    if tmp.GetEntries()<50 :
-                        print("Not Enough Statistics: ",tmp.GetEntries() ,"at", detID, c, )
+                    print("Fitting ", histogram)
+                    if tmp.GetEntries() < 100 :
+                        print("Not Enough Statistics: ",tmp.GetEntries() ,"at", histogram )
                         continue
-                    self.canvases["langau_muon"+str(detID)].cd(c+1)
-                    res = self.fit_langau(tmp,'L',0.8*tmp.GetBinCenter(bmin),1.5*tmp.GetBinCenter(bmax))
-                    langau = tmp.GetFunction("langau")
+                    self.canvases[histogram].cd()
+                    if  histogram.find('qdcDS') > -1:
+                        print("found histogram ", histogram)
+                        res =self.fit_expoland(tmp,'LM',0.8*tmp.GetBinCenter(bmin),1.5*tmp.GetBinCenter(bmax))
+                        langau = tmp.GetFunction("langau")
+                    else :                    
+                        rc = tmp.Fit('landau',"SLM",'',0.8*tmp.GetBinCenter(bmin),1.5*tmp.GetBinCenter(bmax))
+                        langau = tmp.GetFunction("landau")
                     print("Fitted")
                     tmp.Draw()
+#                    ROOT.gPad.Modify()
                     ROOT.gPad.Update()
+ #                   self.canvases[histogram].Update()
                     if not langau  :
-                        print("Fit Failed")
+                        print("Fit Failed for histogram ", histogram )
                         continue
                     mp = langau.GetParameter(1)
                     mp_langau_gr.SetPoint(np, fc+1,mp)
@@ -331,18 +270,18 @@ class Analyzer:
                     ey = langau.GetParError(1)
                     mp_langau_gr.SetPointError(np, ex, ey)
                     chi2 = langau.GetChisquare()
-                    ndof = langau.GetNDF()+1E-12
+                    ndof = langau.GetNDF() #+1E-12
                     control = chi2/ndof
-                    if control > 200: control = 200
-                    chi2_gr.SetPoint(np , fc+1 , control)
+#                    if control > 200: control = 200
+                    chi2_gr.SetPoint(np , fc+1 , control) 
                     np += 1
+
         ut.bookCanvas(self.canvases, "mp_all_channels", "Most Probable Values ", 1000,500,1,2)           
         self.canvases["mp_all_channels"].cd(1)
         mp_langau_gr.Draw('AP')
         self.canvases["mp_all_channels"].cd(2)
         chi2_gr.Draw("AP")
         return mp_langau_gr, chi2_gr
-
     def analyze_us_res(self):
         ut.bookCanvas(self.canvases,"US_residuals","",1600,1000,3,2)
         ut.bookCanvas(self.canvases,"occupancies","",1600,1000,3,2)
@@ -374,13 +313,17 @@ class Analyzer:
             ROOT.gPad.Update()
             gr_bar_eff[i]  = eff.GetPaintedGraph().Clone()
             gr_bar_eff[i].GetXaxis().SetTitle("bar ID")
-            gr_bar_eff[i].GetXaxis().SetLabelSize(0.05)
-            gr_bar_eff[i].GetXaxis().SetTitleSize(0.05)
-            gr_bar_eff[i].GetXaxis().SetNdivisions(11)
+            gr_bar_eff[i].GetXaxis().SetLabelSize(0.035)
+            gr_bar_eff[i].GetXaxis().SetTitleSize(0.035)
+            gr_bar_eff[i].GetXaxis().SetNdivisions(12)
+            gr_bar_eff[i].GetXaxis().SetRangeUser(0,10.9)
             gr_bar_eff[i].GetYaxis().SetTitle("eff")
-            gr_bar_eff[i].GetYaxis().SetTitleSize(0.05)
-            gr_bar_eff[i].GetYaxis().SetLabelSize(0.05)
+            gr_bar_eff[i].GetYaxis().SetTitleSize(0.035)
+            gr_bar_eff[i].GetYaxis().SetLabelSize(0.035)
+            gr_bar_eff[i].GetYaxis().SetTitleOffset(1)
+#            gr_bar_eff[i].GetYaxis().SetRangeUser(0.9,1.01)
             gr_bar_eff[i].SetMarkerStyle(21)
+            gr_bar_eff[i].SetTitle("US Plane " + str(i))
             for j in range(gr_bar_eff[i].GetN()):
                 gr_bar_eff[i].GetEXlow()[j] = 0
                 gr_bar_eff[i].GetEXhigh()[j] = 0
@@ -394,18 +337,23 @@ class Analyzer:
                 ROOT.gPad.Update()
                 gr_channel_eff[detID] = eff.GetPaintedGraph().Clone()
                 gr_channel_eff[detID].GetXaxis().SetTitle("channel ID")
-                gr_channel_eff[detID].GetXaxis().SetLabelSize(0.05)
-                gr_channel_eff[detID].GetXaxis().SetTitleSize(0.05)
+                gr_channel_eff[detID].GetXaxis().SetLabelSize(0.035)
+                gr_channel_eff[detID].GetXaxis().SetTitleSize(0.035)
                 gr_channel_eff[detID].GetXaxis().SetNdivisions(17)
+                gr_channel_eff[detID].GetXaxis().SetRangeUser(0,16.9)
                 gr_channel_eff[detID].GetYaxis().SetTitle("eff")
-                gr_channel_eff[detID].GetYaxis().SetTitleSize(0.05)
-                gr_channel_eff[detID].GetYaxis().SetLabelSize(0.05)
+                gr_channel_eff[detID].GetYaxis().SetTitleSize(0.035)
+                gr_channel_eff[detID].GetYaxis().SetLabelSize(0.035)
+                gr_channel_eff[detID].GetYaxis().SetTitleOffset(1)
                 gr_channel_eff[detID].SetMarkerStyle(21)
+                gr_channel_eff[detID].SetTitle("US Plane " + str(i)+" bar "+str(detID))
                 for k in range(gr_channel_eff[detID].GetN()):
                     gr_channel_eff[detID].GetEXlow()[k] = 0
                     gr_channel_eff[detID].GetEXhigh()[k] = 0
 
         ut.bookCanvas(self.canvases,"efficiencies_US_bars", "efficiencies",1600,1200, 3, 2)
+
+
         for i in range(5):        
             self.canvases["efficiencies_US_bars"].cd(i+1)
             gr_bar_eff[i].Draw("AP")
@@ -419,6 +367,25 @@ class Analyzer:
 #                ROOT.gPad.Modified()
 #                ROOT.gPad.Update()
 
+            self.canvases["efficiencies_US_channels_plane_"+str(i)].cd(11)        
+            t = ROOT.TLatex()
+            t.SetNDC()
+            t.SetTextFont( 102 )
+            t.SetTextColor( 1 )
+            t.SetTextSize( 0.08 )
+            t.SetTextAlign( 12 )
+            t.DrawLatex( 0.4, 0.6, 'RUN '+str(self.runNr))
+     
+
+        self.canvases["efficiencies_US_bars"].cd(6)
+        t = ROOT.TLatex()
+        t.SetNDC()
+        t.SetTextFont( 102 )
+        t.SetTextColor( 1 )
+        t.SetTextSize( 0.08 )
+        t.SetTextAlign( 12 )
+        t.DrawLatex( 0.4, 0.6, 'RUN '+str(self.runNr))
+ 
     def write_to_file(self):    
         self.outf.cd()
         for canvas in self.canvases:

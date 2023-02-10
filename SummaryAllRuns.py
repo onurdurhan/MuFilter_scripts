@@ -2,8 +2,14 @@ import ROOT
 import os
 import rootUtils as ut
 ROOT.gROOT.SetBatch(ROOT.kTRUE)
-from random import random
-
+ROOT.gStyle.SetTitleFont(102,"")
+ROOT.gStyle.SetTitleFont(102,"xyz")
+ROOT.gStyle.SetTextFont(10)
+ROOT.gStyle.SetStatFont(102)
+ROOT.gStyle.SetLabelFont(102,"xyz")
+ROOT.gStyle.SetLegendFont(102)
+#ROOT.gStyle.SetHistLineColor(1)
+#ROOT.gStyle.SetHistLineWidth(3)
 
 
 class Summary:
@@ -49,7 +55,7 @@ class Summary:
                             print("Histogram not found", detID, c)
                             gr[str(detID)+"_"+str(c)].SetPoint(np, int(run), 0.)
                             continue
-                        langau = h.GetFunction("landau")
+                        langau = h.GetFunction("langau")
                         if not langau  :
                             print("No Fit result for ", detID, c)
                             gr[str(detID)+"_"+str(c)].SetPoint(np, int(run), 0.)
@@ -57,7 +63,6 @@ class Summary:
                         value = langau.GetParameter(1)
                         gr[str(detID)+"_"+str(c)].SetPoint(np, int(run), value)
             np+=1
-
         for l in range(5):
             for bar in range(10):
                 detID=int(2E4+l*1E3+bar)
@@ -66,12 +71,14 @@ class Summary:
                     summary_graph[detID].Add(gr[str(detID)+"_"+str(c)],"P")
                     summary_graph[detID].GetXaxis().SetTitle("Run Nr")
                     summary_graph[detID].GetYaxis().SetTitle("MPV")
- 
+                    summary_graph[detID].SetTitle(str(detID)+ "MPVs")
                     gr[str(detID)+"_"+str(c)].SetMarkerStyle(21)
         for l in range(5):
             for bar in range(10):
                 detID=int(2E4+l*1E3+bar)
                 cv["detID_"+str(detID)].cd()
+                cv["detID_"+str(detID)].SetTitle("MPVs of " + str(detID))
+                summary_graph[detID].SetTitle("MPVs of " + str(detID))
                 summary_graph[detID].Draw("ALP pmc plc")
 
         self.outf.cd()

@@ -19,8 +19,8 @@ class Printer:
         self.f = ROOT.TFile(fname)
         if fname.find('TI18')>0 : data = 'TI18'
         else : data = 'H8'
-        idx = fname.find('run')
-        self.runNr = fname[idx:(idx+7)]
+        idx = fname.find('00')
+        self.runNr = fname[idx:(idx+6)]
  
    
     def smallSiPMchannel(self,i):

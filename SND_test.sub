@@ -4,5 +4,6 @@ output      = /afs/cern.ch/work/o/onur/output/onur.$(ClusterId).$(ProcId).out
 error       = /afs/cern.ch/work/o/onur/error/onur.$(ClusterId).$(ProcId).err
 log         = log/onur.log
 +JobFlavour = "longlunch"
++AccountingGroup = "group_u_SNDLHC.users"
 Transfer_output_files = ""
-queue 500 run from /afs/cern.ch/work/o/onur/scripts/trial_runs.txt
+queue 500 run from /afs/cern.ch/work/o/onur/scripts/US_scripts/run_5396.txt

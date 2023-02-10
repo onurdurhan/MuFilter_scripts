@@ -22,7 +22,7 @@ ROOT.gInterpreter.Declare("""
 #include "TrackPoint.h"
 
 void fixRoot(MuFilterHit& aHit,std::vector<int>& key,std::vector<float>& value, bool mask) {
-   std::map<int,float> m = aHit.GetAllSignals(false);
+   std::map<int,float> m = aHit.GetAllSignals(true, false);
    std::map<int, float>::iterator it = m.begin();
    while (it != m.end())
     {
@@ -228,6 +228,7 @@ class MuFilterEngine:
         self.systemAndBars     = {1:7,2:10,3:60}
         self.systemAndChannels = {1:16,2:16,3:2}
         self.sdict             = {1:'Veto',2:'US',3:'DS'}
+        self.newtree = eventTree.CloneTree(0)
         for system in self.systemAndPlanes:
             for plane in range(self.systemAndPlanes[system]):
                 if system == 2:
@@ -258,9 +259,13 @@ class MuFilterEngine:
         ut.bookHist(self.hist,"xEx_diff","",100,-25.,25.)
         ut.bookHist(self.hist,"yEx_diff","",100,-25.,25.)
         ut.bookHist(self.hist,"xvsy","",100,-25.,25.,100,-25.,25.)
+        ut.bookHist(self.hist,"R","",100,0.,25.)
+        for l in range(2):
+            ut.bookHist(self.hist,"residuals-veto"+str(l),"Veto Y residual plane"+str(l), 60,-30.,30.)
+            self.hist["residuals-veto"+str(l)].GetXaxis().SetTitle("res [cm]")
 
-        for key in self.hist:
-            print(key)
+
+
         print("--------------------- Histograms booked -----------------------")
 
 
@@ -345,7 +350,6 @@ class MuFilterEngine:
         veto=False
         for hit in eventTree.Digi_MuFilterHits:
             if not hit.isValid() : continue
-            detID = hit.GetDetectorID()
             system = hit.GetSystem()
             if system == 1 : 
                 veto=True
@@ -383,7 +387,7 @@ class MuFilterEngine:
             tmp.append(i+expected_detID)
         for bar in tmp:
             if bar in observed_detIDs : eff = bar
-        if eff<0: print("inefficency at event ", eventTree.GetReadEvent(),"missing hit at: ", expected_detID, "hits at bars:", observed_detIDs)
+        if eff<0: print("inefficency at event ", eventTree.GetReadEvent(),eventChain.GetCurrentFile().GetName(),"missing hit at: ", expected_detID, "hits at bars:", observed_detIDs)
         return eff
 
     def ringing_timestamp(self,aTree):
@@ -408,28 +412,72 @@ class MuFilterEngine:
             if  'DS'   not in TRACKS :continue
             both_on_plane = True
             for key in TRACKS:
-                reach = self.check_scoring(TRACKS[key],1,1)
+                reach = self.check_scoring(TRACKS[key],1,0)
                 if not reach :
                     both_on_plane = False
                     break
             if not both_on_plane : continue
-            fitStatus = TRACKS['DS'].getFitStatus()
-            chi2Ndof = fitStatus.getChi2()/(fitStatus.getNdf()+1E-10)
-            MuFilter.GetPosition(int(1*10**4+1*1E3+4),A,B)
+            fitStatus = TRACKS['Scifi'].getFitStatus()
+            chi2 = fitStatus.getChi2()
+            Ndof = fitStatus.getNdf()
+            chi2Ndof = fitStatus.getChi2()/(Ndof+1E-12)
+            if chi2Ndof > 9. : continue
+            MuFilter.GetPosition(int(1*10**4+0*1E3+0),A,B)
             z_mid = (A[2]+B[2])/2
             xEx_Scifi, yEx_Scifi = self.extrapolate(TRACKS['Scifi'],z_mid)
             xEx_DS, yEx_DS = self.extrapolate(TRACKS['DS'],z_mid)
             x_diff=xEx_Scifi-xEx_DS
             y_diff=yEx_Scifi-yEx_DS
+            R = ROOT.TMath.Sqrt(x_diff**2+y_diff**2)
             self.hist['xEx_diff'].Fill(x_diff)
             self.hist['yEx_diff'].Fill(y_diff)
             self.hist['xvsy'].Fill(x_diff,y_diff)
+            self.hist['R'].Fill(R)
+
+            veto_hits={0:[],1:[]}
+            for hit in tree.Digi_MuFilterHits:
+                system=hit.GetSystem()
+                if system!=1:continue
+                detID=hit.GetDetectorID()
+                l  = (detID%10000)//1000
+                bar = detID%1000
+                veto_hits[l].append(hit)
+                res = self.residual(TRACKS['Scifi'],detID)
+                self.hist["residuals-veto"+str(l)].Fill(res)
+
+            clean_event = True
+            for l in veto_hits:
+                if len(veto_hits[l])!=1:
+                    clean_event=False 
+                    break
+                detID = veto_hits[l][0].GetDetectorID()
+                res = self.residual(TRACKS['Scifi'],detID)
+                if res > 6.01:
+                    clean_event = False
+                    break
+            if not clean_event : continue
+            for l in veto_hits:
+                hit = veto_hits[l][0]
+                detID = hit.GetDetectorID()
+                system = hit.GetSystem()
+                bar = detID%1000
+                signals = map2Dict(hit,"GetAllSignals",mask = True)
+                times = map2Dict(hit,"GetAllTimes",mask = True)
+                orientation = self.systemAndOrientation(system,l)
+                bar_key = self.sdict[system]+"plane"+str(l)+orientation+"bar"+str(bar)
+                nSiPMs = hit.GetnSiPMs()
+                nSides = hit.GetnSides()
+                for key in signals:
+                    if nSides > 1 and nSiPMs>key : side="L"
+                    if nSides > 1 and nSiPMs<=key: side="R"
+                    channel_key = bar_key+side+"largesipm"+str(key)
+                    self.hist["qdc"+channel_key].Fill(signals[key])
                                                 
     def us_eff(self):
         background_region = {0:15.,1:15.,2:12.5,3:10.,4:10.}
         ROOT.EnableImplicitMT()
         newtree = eventTree.CloneTree(0)
-        for event in self.loopOver: 
+        for event in self.loopOver:
             if event > eventTree.GetEntries(): break # don't loopover the same event in condor !
             Reco_MuonTracks.Clear()
             for aTrack in Reco_MuonTracks: aTrack.Delete()
@@ -457,8 +505,8 @@ class MuFilterEngine:
             slope=ROOT.TMath.Sqrt(slope_x**2+slope_y**2)
             self.hist["track_angle_x"].Fill(slope_x)
             self.hist["track_angle_y"].Fill(slope_y)
-            if abs(mom.x()/mom.z())>0.1: continue
-            if abs(mom.y()/mom.z())>0.2: continue
+            if abs(slope_x)>0.1: continue
+            if abs(slope_y)>0.2: continue
             nHit_per_stat  = {0:0,1:0,2:0,3:0,4:0}
             reach=self.check_scoring(theTrack,2,0)
             if reach == False : continue
@@ -481,9 +529,9 @@ class MuFilterEngine:
                 if system == 2:
                     us_hits[hit]=detID
                     nHit_per_stat[l]+=1
-                res = self.residual(theTrack,detID)
-                self.hist["residuals-"+str(l)].Fill(res)
-                if abs(res) > background_region[l] : is_noisy = True
+                    res = self.residual(theTrack,detID)
+                    self.hist["residuals-"+str(l)].Fill(res)
+                    if abs(res) > background_region[l] : is_noisy = True
             expected_detIDs = self.expected_bars(theTrack)
             if len(expected_detIDs) < 5 : print("a bug is here ", expected_detIDs)
             if is_noisy :continue
@@ -497,9 +545,9 @@ class MuFilterEngine:
                     break
 #            if sum(nHit_per_stat.values())<4 : continue
                 self.hist["nbrHits-"+str(l)].Fill(nHit_per_stat[l])
-                which_bar = self.is_bar_efficient(expected_detID,observed_detIDs)
-                if which_bar > 0 :
-                    bar = which_bar%1000
+                fired_bar = self.is_bar_efficient(expected_detID,observed_detIDs)
+                if fired_bar > 0 :
+                    bar = fired_bar%1000
                     self.hist["pass-bars-"+str(l)].Fill(bar+1)
                     self.hist["total-bars-"+str(l)].Fill(bar+1)
                 else :
@@ -508,7 +556,7 @@ class MuFilterEngine:
                     self.hist["total-bars-"+str(l)].Fill(bar+1)
             if not clean_mu_event : continue
             us_hits.update(ds_hits)
-            newtree.Fill()
+            self.newtree.Fill()
             for hit in us_hits:
                 detID = hit.GetDetectorID()
                 system = hit.GetSystem()
@@ -539,13 +587,14 @@ class MuFilterEngine:
                         self.hist["total-channels-"+bar_key].Fill(key+1)
                     else:
                         self.hist["total-channels-"+bar_key].Fill(key+1)
-            theTrack.Delete()
+#            theTrack.Delete()
             gc.collect()
-        return newtree
+        return self.newtree
 
 
     def write_to_file(self):
         if options.platform == "HTCondor":
-            ut.writeHists(self.hist, "histograms_"+str(self.nJob)+"_"+str(self.data)+"_run"+str(options.runNumber)+"_"+str(options.trackType)+".root")
+            fname = "histograms_"+str(self.nJob)+"_"+str(self.data)+"_run00"+str(options.runNumber)+"_"+str(options.trackType)+".root"
+            ut.writeHists(self.hist, fname)
         else:
-            ut.writeHists(self.hist, "histograms_"+str(self.data)+"_run"+str(options.runNumber)+"_"+str(options.trackType)+".root")
+            ut.writeHists(self.hist, "histograms_"+str(self.data)+"_run00"+str(options.runNumber)+"_"+str(options.trackType)+".root")
