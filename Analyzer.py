@@ -19,27 +19,23 @@ ROOT.gROOT.SetBatch(ROOT.kTRUE)
 class Gaux:
     def __call__(self, x, par):
         #Fit parameters:
-        #par[0]= Box_1  (constant)  box to be convoluted by gauss
-        #par[1]= gaus scale par
+        #par[0]= Box constant
+        #par[1]= Gaus Norm
         #par[2]= mean
         #par[3]= sigma
         #par[4]= constant (noise)
-        np = 50.      # number of convolution steps
-        integral = 0 
-#        x_low= -3
-#        x_up =  3
-        x_low = -3.
-        x_up  = 3.
+        np = 100.      # number of convolution steps
+        integral = 0
+        sc = 5.
+        x_low = -3 #x[0] - sc * par[2]
+        x_up  = 3  #x[0] + sc * par[2] 
         dt = (x_up-x_low) / np
         i=0.0
         while i<=np:
             t = x_low+i*dt
             integral += par[0]*par[1]*ROOT.TMath.Gaus(x[0]-t,par[2],par[3],True)*dt
-            i+=1.
-        val = integral+par[4]
-        if x[0]<x_up and x[0]>x_low: fit_val = val
-        else :
-            fit_val = par[1]*ROOT.TMath.Gaus(x[0],par[2],par[3],True)+par[4]
+            i+=1. 
+        fit_val = integral+par[4]
         return fit_val
 
 
@@ -111,17 +107,31 @@ class ExpoLandau:
         expoland = expo+land
         return expoland
 
+class Landau:
+    def __call__(self,x,par):
+        mpshift  = -0.22278298
+        mpc = par[1] - mpshift * par[0]
+        landau = par[2]*ROOT.TMath.Landau(x[0],mpc,par[0])
+        return landau
+class Gaus:
+    def __call__(self,x,par):
+        gaus = par[2]*ROOT.TMath.Gaus(x[0],par[0],par[1],True)
+        return gaus
+
+
 gaux = Gaux()
 langaufun = Langau()
 twoLangaufun = TwoLangaufun()
 expoland = ExpoLandau()
+landau = Landau()
+gaus = Gaus()
 
 class Analyzer:
     def __init__(self,fname):
         self.fname = fname
         self.canvases = {}
         self.f = ROOT.TFile(fname)
-        if fname.find('TI18')>0 : data = 'TI18'
+        if fname.find('TI18')>0 or fname.find('incomplete')>0: data = 'TI18'
         else : data = 'H8'
         idx = fname.find('00')
         self.runNr = fname[idx:(idx+6)]
@@ -170,55 +180,57 @@ class Analyzer:
         rc = hist.Fit(F,'S'+o,'',bmin,bmax)
 
     def fit_gaux(self, hist):
-        params = {0:'Const(box)',1:'Scale(gaus)',2:'mean',3:'sigma',4:'Const(noise)'}
-        binmax = hist.GetMaximumBin()
-        binmin = hist.GetMinimumBin()
-        x_max =  15.#hist.GetXaxis().GetBinCenter(binmax)
-        x_min = -15#hist.GetXaxis().GetBinCenter(binmin)
+        params = {0:'Const (box)', 1:'gaus norm', 2:'mean', 3:'sigma',4:'Const (noise)'}
+        x_max =  6.
+        x_min = -6.
         mean  =  hist.GetMean()
         sigma =  hist.GetStdDev()
-        rc  = hist.Fit("gaus")
-#        res = rc.Get()
-        res = hist.GetFunction("gaus")
-#    if not res: return res
-#        gaux = Gaux()
         F = ROOT.TF1('gaux', gaux, x_min,x_max,len(params))
-        print("fucntion is ", F)
+        print("function is ", F)
         for p in params: F.SetParName(p,params[p])
         F.SetParameter(0,hist.GetMaximum())
-        F.SetParameter(1,res.GetParameter(0))
-        F.SetParameter(2,res.GetParameter(1))
-        F.SetParameter(3,res.GetParameter(2))
-        F.SetParameter(4,3.)
-
-        F.SetParLimits(0,0,100)
+        F.SetParameter(1,1)
+        F.SetParameter(2,mean)
+        F.SetParameter(3,sigma)
+        F.SetParameter(4,200)
         F.SetParLimits(3,0,10)
-        hist.Fit("gaux")
+        hist.Fit("gaux",'R')
+
+
+    def fit_convolution(self,hist,o,bmin,bmax):
+        g = ROOT.TF1("g",gaus,-50,200,3)
+        l = ROOT.TF1("l",landau,-50,200,3)
+        self.f_conv = ROOT.TF1Convolution("landau","gaus",-50,200,True)
+        self.f_conv.SetRange(-50,200)
+        print("nbr of parameters ", self.f_conv.GetNpar())
+        F = ROOT.TF1("langau", self.f_conv, -10., 200., self.f_conv.GetNpar())
+        print("nbr of parameters ", self.f_conv.GetNpar())
+#        params = {0:'Width(scale)',1:'mostProbable',2:'norm',3:'sigma',4:'N2'}
+#        for p in params: F.SetParName(p,params[p])
+#        f_conv.SetNofPointsFFT(250)
+        rc = hist.Fit('landau','S'+o,'',bmin,bmax)
+        res = rc.Get()
+        if not res: return res
+        F.SetParameter(0,2)
+        F.SetParameter(1,res.Parameter(1))
+        F.SetParameter(2,res.Parameter(2))
+        F.SetParameter(3,1)
+        F.SetParameter(4,1)
+        F.SetParLimits(2,0,10)
+        rc = hist.Fit(F,'S'+o,'',bmin,bmax)
+        res = rc.Get()
+        return res
+
+
+
+
+
 
     def smallSiPMchannel(self,i):
         if i==2 or i==5 or i==10 or i==13: return True
         else: return False
     
 
-    def fit_convolution(self, hist, o, bmin,bmax):
-#        f_conv.SetNofPointsFFT(1000)
-        F = ROOT.TF1("langau", f_conv, -10., 200., f_conv.GetNpar())
-        params = {0:'Width(scale)',1:'mostProbable',2:'norm',3:'sigma',4:'N2'}
-        for p in params: F.SetParName(p,params[p])
-        rc = hist.Fit('landau','S'+o,'',bmin,bmax)
-        res = rc.Get()
-        if not res: return res
-        F.SetParameter(2,res.Parameter(0))
-        F.SetParameter(1,res.Parameter(1))
-        F.SetParameter(0,res.Parameter(2))
-        F.SetParameter(3,res.Parameter(2))
-        F.SetParameter(4,0)
-        F.SetParLimits(0,0,100)
-        F.SetParLimits(1,0,100)
-        F.SetParLimits(3,0,10)
-        rc = hist.Fit(F,'S'+o,'',bmin,bmax)
-        res = rc.Get()
-        return res
 
     def analyze_QDC(self):
         hist= {}
@@ -229,11 +241,12 @@ class Analyzer:
         chi2_gr.SetMarkerStyle(21)
         fc = 0
         np = 0
+        negative = []
         for histogram in hist:
-                    if histogram.find("qdcDS")<0 : continue
+                    if histogram.find("qdcVeto")<0 : continue
                     ut.bookCanvas(self.canvases, histogram,histogram)
         for histogram in hist:
-                    if histogram.find("qdcDS")<0 : continue
+                    if histogram.find("qdcVeto")<0 : continue
                     fc+=1
                     tmp = self.f.Get(histogram)
                     tmp.SetTitle(histogram)
@@ -253,9 +266,10 @@ class Analyzer:
                         print("found histogram ", histogram)
                         res =self.fit_expoland(tmp,'LM',0.8*tmp.GetBinCenter(bmin),1.5*tmp.GetBinCenter(bmax))
                         langau = tmp.GetFunction("langau")
-                    else :                    
-                        rc = tmp.Fit('landau',"SLM",'',0.8*tmp.GetBinCenter(bmin),1.5*tmp.GetBinCenter(bmax))
-                        langau = tmp.GetFunction("landau")
+                    else :
+                        rc = self.fit_convolution(tmp,'LM',0.8*tmp.GetBinCenter(bmin),1.5*tmp.GetBinCenter(bmax))
+#                        rc = tmp.Fit('landau',"SLMQ",'',0.8*tmp.GetBinCenter(bmin),1.5*tmp.GetBinCenter(bmax))
+                        langau = tmp.GetFunction("langau")
                     print("Fitted")
                     tmp.Draw()
 #                    ROOT.gPad.Modify()
@@ -265,6 +279,7 @@ class Analyzer:
                         print("Fit Failed for histogram ", histogram )
                         continue
                     mp = langau.GetParameter(1)
+                    if mp <0 : negative.append(histogram)
                     mp_langau_gr.SetPoint(np, fc+1,mp)
                     ex = 0
                     ey = langau.GetParError(1)
@@ -273,21 +288,26 @@ class Analyzer:
                     ndof = langau.GetNDF() #+1E-12
                     control = chi2/ndof
 #                    if control > 200: control = 200
-                    chi2_gr.SetPoint(np , fc+1 , control) 
+                    chi2_gr.SetPoint(np , fc+1 , control)
                     np += 1
-
+ 
         ut.bookCanvas(self.canvases, "mp_all_channels", "Most Probable Values ", 1000,500,1,2)           
         self.canvases["mp_all_channels"].cd(1)
         mp_langau_gr.Draw('AP')
         self.canvases["mp_all_channels"].cd(2)
         chi2_gr.Draw("AP")
+        with open('negative.txt', 'w') as f:
+            for histogram in negative:
+                f.write(histogram)
+                f.write('\n')
         return mp_langau_gr, chi2_gr
+
+
     def analyze_us_res(self):
         ut.bookCanvas(self.canvases,"US_residuals","",1600,1000,3,2)
-        ut.bookCanvas(self.canvases,"occupancies","",1600,1000,3,2)
         for l in range(5):
             self.canvases["US_residuals"].cd(l+1)
-            h = self.f.Get("residual_s_"+str(l))
+            h = self.f.Get("residuals-"+str(l)).ProjectionX()
             h.SetLineWidth(3)
             h.GetXaxis().SetLabelSize(0.05)
             h.GetXaxis().SetTitleSize(0.05)
@@ -295,10 +315,7 @@ class Analyzer:
             self.fit_gaux(h)
             h.Draw()
             ROOT.gStyle.SetOptFit(1111)
-            h = self.f.Get("occupancy_"+str(l))
-            self.canvases["occupancies"].cd(l+1)
-            h.SetLineWidth(3)
-            h.Draw()
+            ROOT.gPad.Update()
  
 
     def analyze_eff(self):

@@ -234,7 +234,7 @@ class MuFilterEngine:
                 if system == 2:
                     ut.bookHist(self.hist,"pass-bars-"+str(plane),   " " , 22,0.,11)
                     ut.bookHist(self.hist,"total-bars-"  +str(plane)," " , 22,0.,11)
-                    ut.bookHist(self.hist,"residuals-"+str(plane),"Residuals plane"+str(plane), 60,-30.,30.)
+                    ut.bookHist(self.hist,"residuals-"+str(plane),"Residuals plane"+str(plane), 90,-45.,45.,10,0,10)
                     self.hist["residuals-"+str(plane)].GetXaxis().SetTitle("res [cm]")
                     ut.bookHist(self.hist,"nbrHits-"+str(plane)," nbr of hits ",10,0.,10.)
                     self.hist["nbrHits-"+str(plane)].GetXaxis().SetTitle("nbr of hits")
@@ -436,6 +436,7 @@ class MuFilterEngine:
 
             veto_hits={0:[],1:[]}
             for hit in tree.Digi_MuFilterHits:
+                if not hit.isValid() : continue
                 system=hit.GetSystem()
                 if system!=1:continue
                 detID=hit.GetDetectorID()
@@ -499,7 +500,17 @@ class MuFilterEngine:
             fitStatus = theTrack.getFitStatus()
             chi2Ndof = fitStatus.getChi2()/(fitStatus.getNdf()+1E-10)
             self.hist["chi2Ndof"].Fill(chi2Ndof)
+#            print(chi2Ndof, fitStatus.getNdf())
             if fitStatus.getNdf()<2 : continue
+            for hit in eventTree.Digi_MuFilterHits:
+                if not hit.isValid() : continue
+                detID = hit.GetDetectorID()
+                system = hit.GetSystem()
+                l  = (detID%10000)//1000
+                bar = detID%1000
+                if system !=2 : continue
+                res = self.residual(theTrack,detID)
+                self.hist["residuals-"+str(l)].Fill(res,bar)
             slope_x=mom.x()/mom.z()
             slope_y=mom.y()/mom.z()
             slope=ROOT.TMath.Sqrt(slope_x**2+slope_y**2)
@@ -521,7 +532,7 @@ class MuFilterEngine:
                 l  = (detID%10000)//1000
                 bar = detID%1000
                 if system == 1: continue
-                if system == 3:
+                if system == 3 : ds_hits[hit]=detID
                     pointsWithMeasurement=theTrack.getPointsWithMeasurement()
                     for point in pointsWithMeasurement:
                         rawM=point.getRawMeasurement()
@@ -530,7 +541,7 @@ class MuFilterEngine:
                     us_hits[hit]=detID
                     nHit_per_stat[l]+=1
                     res = self.residual(theTrack,detID)
-                    self.hist["residuals-"+str(l)].Fill(res)
+#                    self.hist["residuals-"+str(l)].Fill(res,bar)
                     if abs(res) > background_region[l] : is_noisy = True
             expected_detIDs = self.expected_bars(theTrack)
             if len(expected_detIDs) < 5 : print("a bug is here ", expected_detIDs)

@@ -2,6 +2,8 @@ import rootUtils as ut
 import ROOT
 ROOT.gROOT.SetBatch(ROOT.kTRUE)
 
+danger = []
+
 def analyze_QDC():
         hist_old= {}
         hist_recalib={}
@@ -70,6 +72,7 @@ def analyze_QDC():
                             threshold_new = new.GetBinCenter(x)
                             thresholds[new]=threshold_new
                             break
+                    if old.GetEntries()>1000 and abs(threshold_new-threshold_old)<1. : danger.append(histogram)
                     threshold_line = {}
                     j = 0
                     for key in thresholds:
@@ -123,7 +126,7 @@ def analyze_QDC():
             fout.cd()
             canvases[canvas].Write()
         fout.Close()
-            
-        
-
-
+        with open('danger.txt', 'w') as f:
+            for thr in danger:
+                f.write(thr)
+                f.write('\n')

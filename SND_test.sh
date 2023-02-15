@@ -1,7 +1,7 @@
 #!/bin/bash
 source /cvmfs/sndlhc.cern.ch/SNDLHC-2022/June10/setUp.sh
 source  /afs/cern.ch/user/o/onur/SNDLHC_BETA/config.sh
-DIR=/eos/user/o/onur/sndlhc_veto_data/run00$2/
+DIR=/eos/user/o/onur/sndlhc_DS_data/run00$2/
 echo "$DIR"
 FILE="$DIR"histograms_"$1"_TI18_run00"$2"_DS.root
 echo "$FILE"
