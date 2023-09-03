@@ -138,6 +138,8 @@ if not options.geoFile:
         options.geoFile =  "geofile_sndlhc_TI18_V3_08August2022.root"
     elif options.runNumber < 4855:
         options.geoFile =  "geofile_sndlhc_TI18_V5_14August2022.root"
+    elif options.runNumber > 6000:
+        options.geoFile="geofile_sndlhc_TI18_V1_2023.root"
     else:
         options.geoFile =  "geofile_sndlhc_TI18_V6_08October2022.root"
 
@@ -216,13 +218,14 @@ class MuFilterEngine:
         print("Total nbr of events in this run : ", eventTree.GetEntries()/1E6, "M" )
         if options.path.find('TI18') or options.path.find('physics')>0: self.data = 'TI18'
         else : self.data = 'H8'
-        self.nPerJob = int(options.nPerJob)
-        self.nJob = int(options.nJob)
+        self.nPerJob = int(options.nPerJob) ## nbr of events per job
+        self.nJob = int(options.nJob)       ## Job ID
         self.nTot = eventTree.GetEntries() ### Total nbr of events
-        self.nStart = self.nPerJob*self.nJob
-        self.nEnd   = min(self.nTot,self.nStart + self.nPerJob)
+        self.nStart = self.nPerJob*self.nJob ## first event in the current job
+        self.nEnd   = min(self.nTot,self.nStart + self.nPerJob) #last event in the current job
         if options.platform == 'HTCondor' : self.loopOver = range(self.nStart,self.nEnd)
         else: self.loopOver = range(options.nEvents)
+        ## Use Thomas' convention for the histogram names
         self.hist = {}
         self.systemAndPlanes   = {1:2,2:5,3:7}
         self.systemAndBars     = {1:7,2:10,3:60}
@@ -261,12 +264,10 @@ class MuFilterEngine:
         ut.bookHist(self.hist,"xvsy","",100,-25.,25.,100,-25.,25.)
         ut.bookHist(self.hist,"R","",100,0.,25.)
         for l in range(2):
-            ut.bookHist(self.hist,"residuals-veto"+str(l),"Veto Y residual plane"+str(l), 60,-30.,30.)
+            ut.bookHist(self.hist,"residuals-veto"+str(l),"Veto Y residual plane"+str(l), 120,-30.,30.,7,0,7)
             self.hist["residuals-veto"+str(l)].GetXaxis().SetTitle("res [cm]")
 
-
-
-        print("--------------------- Histograms booked -----------------------")
+        print("<-------------------- Histograms booked -------------------->")
 
 
     def systemAndOrientation(self,s,plane):
@@ -346,15 +347,6 @@ class MuFilterEngine:
             if chris == False : break  ## break it already !
         return chris
       
-    def check_veto(self):
-        veto=False
-        for hit in eventTree.Digi_MuFilterHits:
-            if not hit.isValid() : continue
-            system = hit.GetSystem()
-            if system == 1 : 
-                veto=True
-                break
-        return veto
 
     def smallSiPMchannel(self,i):
         if i==2 or i==5 or i==10 or i==13: return True
@@ -387,7 +379,7 @@ class MuFilterEngine:
             tmp.append(i+expected_detID)
         for bar in tmp:
             if bar in observed_detIDs : eff = bar
-        if eff<0: print("inefficency at event ", eventTree.GetReadEvent(),eventChain.GetCurrentFile().GetName(),"missing hit at: ", expected_detID, "hits at bars:", observed_detIDs)
+        if eff<0: print("inefficency at event ", eventTree.GetReadEvent(),eventChain.GetCurrentFile().GetName(),"missing hits at the sequence: ", expected_detID, "fired bars:", observed_detIDs)
         return eff
 
     def ringing_timestamp(self,aTree):
@@ -405,22 +397,17 @@ class MuFilterEngine:
             rc = trackTask.ExecuteTask("ScifiDS")
             if Reco_MuonTracks.GetEntries()>2 : continue
             TRACKS={}
+            E = eventTree.EventHeader
             for track in Reco_MuonTracks:
                 if track.GetUniqueID()==1 : TRACKS['Scifi']=track
                 if track.GetUniqueID()==3 : TRACKS['DS']=track
             if 'Scifi' not in TRACKS :continue
             if  'DS'   not in TRACKS :continue
-            both_on_plane = True
-            for key in TRACKS:
-                reach = self.check_scoring(TRACKS[key],1,0)
-                if not reach :
-                    both_on_plane = False
-                    break
-            if not both_on_plane : continue
             fitStatus = TRACKS['Scifi'].getFitStatus()
             chi2 = fitStatus.getChi2()
             Ndof = fitStatus.getNdf()
             chi2Ndof = fitStatus.getChi2()/(Ndof+1E-12)
+            if not fitStatus.isFitConverged() : continue
             if chi2Ndof > 9. : continue
             MuFilter.GetPosition(int(1*10**4+0*1E3+0),A,B)
             z_mid = (A[2]+B[2])/2
@@ -433,7 +420,9 @@ class MuFilterEngine:
             self.hist['yEx_diff'].Fill(y_diff)
             self.hist['xvsy'].Fill(x_diff,y_diff)
             self.hist['R'].Fill(R)
-
+            if x_diff > 12. : continue
+            if y_diff > 12. : continue
+            #check number of hits in each veto plane
             veto_hits={0:[],1:[]}
             for hit in tree.Digi_MuFilterHits:
                 if not hit.isValid() : continue
@@ -444,20 +433,31 @@ class MuFilterEngine:
                 bar = detID%1000
                 veto_hits[l].append(hit)
                 res = self.residual(TRACKS['Scifi'],detID)
-                self.hist["residuals-veto"+str(l)].Fill(res)
-
-            clean_event = True
+                self.hist["residuals-veto"+str(l)].Fill(res,bar)
+            #check residual and nbr of hits in veto
+            clean_veto = True
             for l in veto_hits:
                 if len(veto_hits[l])!=1:
-                    clean_event=False 
+                    clean_veto=False 
                     break
                 detID = veto_hits[l][0].GetDetectorID()
-                res = self.residual(TRACKS['Scifi'],detID)
-                if res > 6.01:
-                    clean_event = False
+                res = self.residual(TRACKS['Scifi'],detID)  # calculate the residual
+                if res > 6.01: # see if hit in the background region
+                    clean_veto = False
                     break
-            if not clean_event : continue
+            if not clean_veto : continue
+            #check both tracks are passing the first veto plane
+            both_on_plane = True
+            for key in TRACKS:
+                reach = self.check_scoring(TRACKS[key],1,0)
+                if not reach :
+                    both_on_plane = False
+                    break
+            if not both_on_plane : continue
+            #Now fill the histogram
+#            print(E.GetEventNumber(), 'good event for veto', tree.GetReadEvent())
             for l in veto_hits:
+                if not hit.isValid() : continue
                 hit = veto_hits[l][0]
                 detID = hit.GetDetectorID()
                 system = hit.GetSystem()
@@ -475,9 +475,7 @@ class MuFilterEngine:
                     self.hist["qdc"+channel_key].Fill(signals[key])
                                                 
     def us_eff(self):
-        background_region = {0:15.,1:15.,2:12.5,3:10.,4:10.}
-        ROOT.EnableImplicitMT()
-        newtree = eventTree.CloneTree(0)
+        background_region = {0:15.,1:15.,2:12.5,3:10.,4:10.} ## background region of residual US hits
         for event in self.loopOver:
             if event > eventTree.GetEntries(): break # don't loopover the same event in condor !
             Reco_MuonTracks.Clear()
@@ -500,7 +498,6 @@ class MuFilterEngine:
             fitStatus = theTrack.getFitStatus()
             chi2Ndof = fitStatus.getChi2()/(fitStatus.getNdf()+1E-10)
             self.hist["chi2Ndof"].Fill(chi2Ndof)
-#            print(chi2Ndof, fitStatus.getNdf())
             if fitStatus.getNdf()<2 : continue
             for hit in eventTree.Digi_MuFilterHits:
                 if not hit.isValid() : continue
@@ -519,7 +516,7 @@ class MuFilterEngine:
             if abs(slope_x)>0.1: continue
             if abs(slope_y)>0.2: continue
             nHit_per_stat  = {0:0,1:0,2:0,3:0,4:0}
-            reach=self.check_scoring(theTrack,2,0)
+            reach=self.check_scoring(theTrack,2,4) #(2,0) for TI18
             if reach == False : continue
             veto_hits = {}
             us_hits =   {}
@@ -532,19 +529,19 @@ class MuFilterEngine:
                 l  = (detID%10000)//1000
                 bar = detID%1000
                 if system == 1: continue
-                if system == 3 : ds_hits[hit]=detID
+                if system == 3 :
                     pointsWithMeasurement=theTrack.getPointsWithMeasurement()
                     for point in pointsWithMeasurement:
                         rawM=point.getRawMeasurement()
-                        if rawM.getDetId()==detID : ds_hits[hit]=detID
+                        if rawM.getDetId()==detID : 
+                            ds_hits[hit]=detID ## check if the DS hit is associated with the trackfit
                 if system == 2:
                     us_hits[hit]=detID
                     nHit_per_stat[l]+=1
                     res = self.residual(theTrack,detID)
-#                    self.hist["residuals-"+str(l)].Fill(res,bar)
                     if abs(res) > background_region[l] : is_noisy = True
             expected_detIDs = self.expected_bars(theTrack)
-            if len(expected_detIDs) < 5 : print("a bug is here ", expected_detIDs)
+            if len(expected_detIDs) < 5 : print("a bug is here due track extrapolation", expected_detIDs)
             if is_noisy :continue
             observed_detIDs = us_hits.values()
             clean_mu_event = True
@@ -598,8 +595,6 @@ class MuFilterEngine:
                         self.hist["total-channels-"+bar_key].Fill(key+1)
                     else:
                         self.hist["total-channels-"+bar_key].Fill(key+1)
-#            theTrack.Delete()
-            gc.collect()
         return self.newtree
 
 
